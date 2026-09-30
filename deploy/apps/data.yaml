@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+  kind: Application
+  metadata:
+    name: data                      # product-search.yaml: name product-search, wave "1"
+    namespace: argocd
+    annotations: { argocd.argoproj.io/sync-wave: "0" }
+  spec:
+    project: default
+    source:
+      repoURL: https://github.com/Divya-Somashekar/product-search.git
+      targetRevision: main
+      path: deploy/platform/data    # product-search.yaml: deploy/services/product-search/overlays/local
+    destination: { server: https://kubernetes.default.svc, namespace: product-search }
+    syncPolicy:                                                                                                                                                                 No changes this session
+      automated: { prune: true, selfHeal: true }
+      syncOptions: [CreateNamespace=true, SkipDryRunOnMissingResource=true]
+      retry: { limit: 10, backoff: { duration: 10s, factor: 2, maxDuration: 3m } }

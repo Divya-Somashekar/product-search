@@ -1,0 +1,4 @@
+- name: cnpg-operator
+- repoURL: https://cloudnative-pg.github.io/charts
+- chart: cloudnative-pg
+- namespace: cnpg-system

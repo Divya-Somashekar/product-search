@@ -1,0 +1,75 @@
+spring:
+  application:
+    name: product-search
+  profiles:
+    group:
+      # `local` runs against local/docker-compose.yml and loads demo products.
+      local: demo
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  # Connection settings come from the environment (SPRING_DATASOURCE_URL, SPRING_ELASTICSEARCH_URIS, ...);
+  # nothing environment-specific or secret is defaulted here.
+  datasource:
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 5000 # ms
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    locations: classpath:db/migration
+  elasticsearch:
+    connection-timeout: 2s
+    socket-timeout: 10s
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: 8080
+  shutdown: graceful
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  # Probes and metrics on their own port, which the Service does not expose to other callers.
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          include: readinessState,db,elasticsearch
+  observations:
+    key-values:
+      application: ${spring.application.name}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+search:
+  alias: products
+  refresh: false
+
+catalog:
+  currency: EUR

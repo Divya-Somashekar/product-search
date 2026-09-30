@@ -1,0 +1,25 @@
+name: ci
+  on: pull_request
+  permissions:
+    contents: read
+  jobs:
+    app:
+      runs-on: ubuntu-latest                                                                                                                                                    No changes this session
+      defaults: { run: { working-directory: app } }
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-java@v4
+          with: { distribution: temurin, java-version: "25" }
+        - uses: gradle/actions/setup-gradle@v4
+        - run: ./gradlew check
+        - uses: actions/upload-artifact@v4
+          if: always()
+          with: { name: reports, path: app/build/reports }
+    deploy:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - name: Validate manifests
+          run: |
+            curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+            kustomize build deploy/services/product-search/overlays/local | ./kubeconform -strict -summary -

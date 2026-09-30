@@ -1,0 +1,4 @@
+images:
+  - name: product-search
+    newName: ghcr.io/Divya-Somashekar/product-search
+    newTag: initial

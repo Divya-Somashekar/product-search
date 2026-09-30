@@ -1,0 +1,50 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "auto_expand_replicas": "0-1",
+    "max_result_window": 10000,
+    "analysis": {
+      "analyzer": {
+        "product_text": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding"]
+        }
+      },
+      "normalizer": {
+        "lowercase_keyword": {
+          "type": "custom",
+          "filter": ["lowercase", "asciifolding"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "id": { "type": "keyword" },
+      "name": {
+        "type": "text",
+        "analyzer": "product_text",
+        "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } }
+      },
+      "description": { "type": "text", "analyzer": "product_text" },
+      "category": {
+        "type": "keyword",
+        "normalizer": "lowercase_keyword",
+        "fields": { "text": { "type": "text", "analyzer": "product_text" } }
+      },
+      "brand": {
+        "type": "keyword",
+        "normalizer": "lowercase_keyword",
+        "fields": { "text": { "type": "text", "analyzer": "product_text" } }
+      },
+      "price": { "type": "scaled_float", "scaling_factor": 100 },
+      "currency": { "type": "keyword" },
+      "stockQuantity": { "type": "integer" },
+      "inStock": { "type": "boolean" },
+      "createdAt": { "type": "date" },
+      "updatedAt": { "type": "date" }
+    }
+  }
+}
