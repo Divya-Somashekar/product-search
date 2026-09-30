@@ -3,6 +3,6 @@ kind: Application
 metadata: { name: root, namespace: argocd }
 spec:
   project: default
-  source: { repoURL: https://github.com/Divya-Somashekar/product-search.git, targetRevision: main, path: deploy/apps }
-  destination: { server: https://kubernetes.default.svc, namespace: argocd }
+  source: { repoURL: "https://github.com/Divya-Somashekar/product-search.git", targetRevision: main, path: deploy/apps }
+  destination: { server: "https://kubernetes.default.svc", namespace: argocd }
   syncPolicy: { automated: { prune: true, selfHeal: true } }

@@ -6,8 +6,8 @@ metadata:
   annotations: { argocd.argoproj.io/sync-wave: "-1" }
 spec:
   project: default
-  source: { repoURL: https://helm.elastic.co, chart: eck-operator, targetRevision: "<version>" }
-  destination: { server: https://kubernetes.default.svc, namespace: elastic-system }
+  source: { repoURL: "https://helm.elastic.co", chart: eck-operator, targetRevision: "3.5.0" }
+  destination: { server: "https://kubernetes.default.svc", namespace: elastic-system }
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true, ServerSideApply=true]

@@ -1,4 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: product-search
+resources: [../../base]
 images:
   - name: product-search
-    newName: ghcr.io/Divya-Somashekar/product-search
+    newName: ghcr.io/divya-somashekar/product-search
     newTag: initial
