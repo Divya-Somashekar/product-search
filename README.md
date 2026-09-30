@@ -12,6 +12,11 @@ This README is written for future me, coming back with no memory of any of it. I
 was built, how the pieces connect, and exactly how to bring it up and test it again.
 `CLAUDE.md` has the deeper technical notes (code structure, index design, conventions).
 
+Design docs: [`docs/architecture.md`](docs/architecture.md) (components, data flow Postgres →
+Elasticsearch, diagrams) · [`docs/rfc/0001`](docs/rfc/0001-product-search-engine.md) (the
+decision on one page) · [`docs/rfd/0001`](docs/rfd/0001-product-search-with-elasticsearch.md)
+(the full search design and alternatives).
+
 ---
 
 ## 1. What this is, in one picture
@@ -397,7 +402,7 @@ Set up 2026-09-30.
 
 | Decision | Why |
 |---|---|
-| One repo for code and deployment config | Simpler for a PoC. (HiveMQ, where this idea comes from, splits them: app repos push image tags into the `apiaries` config repo.) |
+| One repo for code and deployment config | Simpler for a PoC. |
 | Postgres as source of truth, Elasticsearch only for search | The index can always be rebuilt from Postgres (`/admin/reindex`); no data lives only in ES. |
 | GitHub Container Registry instead of JFrog Artifactory | JFrog needs a company account; GHCR is free with GitHub and needs no secrets in CI. |
 | minikube (not kind) | Addons, dashboard, `stop`/`start` keeps state — friendlier for learning. |
