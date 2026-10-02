@@ -1,0 +1,111 @@
+# Product search API — IntelliJ HTTP Client.
+# Pick the `local` environment (top-right dropdown) so {{host}} resolves; see http-client.env.json.
+# Requires the app running on 8080: ./gradlew bootRun --args='--spring.profiles.active=local'
+
+### List products — captures the first id into {{productId}} for the request below
+GET {{host}}/api/v1/products?page=0&size=5
+Accept: application/json
+
+> {%
+    client.global.set("productId", response.body.items[0].id);
+    client.log("captured productId=" + client.global.get("productId"));
+%}
+
+### Get one product by id  (ProductController.get)
+GET {{host}}/api/v1/products/{{productId}}
+Accept: application/json
+
+### Get an unknown id — 404 as application/problem+json
+GET {{host}}/api/v1/products/00000000-0000-0000-0000-000000000000
+Accept: application/json
+
+### Create a product — captures its id into {{createdId}}
+POST {{host}}/api/v1/products
+Content-Type: application/json
+
+{
+  "name": "Bose QuietComfort Ultra Wireless Headphones",
+  "description": "Over-ear headphones with adaptive noise cancelling.",
+  "category": "Headphones",
+  "brand": "Bose",
+  "price": 379.00,
+  "stockQuantity": 7
+}
+
+> {%
+    client.global.set("createdId", response.body.id);
+%}
+
+### Update the created product
+PUT {{host}}/api/v1/products/{{createdId}}
+Content-Type: application/json
+
+{
+  "name": "Bose QuietComfort Ultra Wireless Headphones",
+  "description": "Over-ear headphones with adaptive noise cancelling.",
+  "category": "Headphones",
+  "brand": "Bose",
+  "price": 299.00,
+  "stockQuantity": 4
+}
+
+### Delete the created product — 204
+DELETE {{host}}/api/v1/products/{{createdId}}
+
+### Validation failure — blank name, negative stock, 3 decimal places
+POST {{host}}/api/v1/products
+Content-Type: application/json
+
+{
+  "name": "",
+  "category": "Headphones",
+  "brand": "Bose",
+  "price": 10.999,
+  "stockQuantity": -1
+}
+
+### Search — the acceptance case: typos tolerated, maxPrice respected
+GET {{host}}/api/v1/products/search?q=wireles%20headphons&maxPrice=100
+Accept: application/json
+
+### Search with filters, facets and sorting
+GET {{host}}/api/v1/products/search?q=headphones&category=Headphones&brand=Sony&minPrice=20&maxPrice=400&inStock=true&sort=price_asc&page=0&size=10
+Accept: application/json
+
+### Rebuild the index from Postgres (409 if one is already running)
+POST {{host}}/api/v1/admin/reindex
+
+### Internal feed — the first keyset page, as a search service would read it
+# Emits ProductSnapshot (the published contract), ordered by id.
+GET {{host}}/internal/products?size=5
+Accept: application/json
+
+> {% client.global.set("cursor", response.body[response.body.length - 1].id); %}
+
+### Internal feed — the next page, strictly after the last id of the previous one
+# A page shorter than `size` is the last one.
+GET {{host}}/internal/products?size=5&after={{cursor}}
+Accept: application/json
+
+### Change log — what a separate search service would consume to stay in step
+# `product` is null when the product is gone. Entries written in the last second are held back
+# (catalog.outbox.visibility-lag), so run a write first and re-send this a moment later.
+GET {{host}}/internal/changes?after=0&size=20
+Accept: application/json
+
+> {%
+    if (response.body.length > 0) {
+        client.global.set("seq", response.body[response.body.length - 1].seq);
+    }
+%}
+
+### Change log — only what has happened since the last page
+GET {{host}}/internal/changes?after={{seq}}&size=20
+Accept: application/json
+
+### Health — management port, not 8080
+GET {{management}}/actuator/health
+Accept: application/json
+
+### Prometheus metrics
+GET {{management}}/actuator/prometheus
