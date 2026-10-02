@@ -4,6 +4,7 @@ import com.example.productsearch.catalog.contract.ProductSnapshot
 import com.example.productsearch.catalog.domain.ProductCommand
 import com.example.productsearch.catalog.domain.ProductPage
 import com.example.productsearch.shared.web.PageResponse
+import java.net.URI
 
 /** The HTTP edge of the catalog: validated requests in, snapshots out. */
 fun ProductRequest.toCommand() =
@@ -16,7 +17,11 @@ fun ProductRequest.toCommand() =
         stockQuantity = stockQuantity,
     )
 
-fun ProductSnapshot.toResponse() =
+/**
+ * [imageUrl] is passed in rather than resolved here: presigning needs the storage port, and these
+ * stay pure functions of a snapshot so the caller decides when a link is worth minting.
+ */
+fun ProductSnapshot.toResponse(imageUrl: URI? = null) =
     ProductResponse(
         id = id,
         name = name,
@@ -30,6 +35,7 @@ fun ProductSnapshot.toResponse() =
         version = version,
         createdAt = createdAt,
         updatedAt = updatedAt,
+        imageUrl = imageUrl?.toString(),
     )
 
-fun ProductPage.toResponse() = PageResponse(items.map(ProductSnapshot::toResponse), page, size, total)
+fun ProductPage.toResponse(imageUrl: (ProductSnapshot) -> URI?) = PageResponse(items.map { it.toResponse(imageUrl(it)) }, page, size, total)

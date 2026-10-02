@@ -1,6 +1,7 @@
 package com.example.productsearch.catalog.api
 
 import com.example.productsearch.catalog.application.ProductService
+import com.example.productsearch.catalog.contract.ProductSnapshot
 import com.example.productsearch.shared.web.PageResponse
 import jakarta.validation.Valid
 import jakarta.validation.constraints.Max
@@ -27,7 +28,7 @@ class ProductController(
     fun create(
         @Valid @RequestBody request: ProductRequest,
     ): ResponseEntity<ProductResponse> {
-        val created = service.create(request.toCommand()).toResponse()
+        val created = service.create(request.toCommand()).withImage()
         val location =
             ServletUriComponentsBuilder
                 .fromCurrentRequest()
@@ -40,19 +41,19 @@ class ProductController(
     @GetMapping("/{id}")
     fun get(
         @PathVariable id: UUID,
-    ): ProductResponse = service.get(id).toResponse()
+    ): ProductResponse = service.get(id).withImage()
 
     @GetMapping
     fun list(
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "20") @Min(1) @Max(100) size: Int,
-    ): PageResponse<ProductResponse> = service.list(page, size).toResponse()
+    ): PageResponse<ProductResponse> = service.list(page, size).toResponse(service::viewUrl)
 
     @PutMapping("/{id}")
     fun update(
         @PathVariable id: UUID,
         @Valid @RequestBody request: ProductRequest,
-    ): ProductResponse = service.update(id, request.toCommand()).toResponse()
+    ): ProductResponse = service.update(id, request.toCommand()).withImage()
 
     @DeleteMapping("/{id}")
     fun delete(
@@ -61,4 +62,39 @@ class ProductController(
         service.delete(id)
         return ResponseEntity.noContent().build()
     }
+
+    /**
+     * Step one of an image upload: ask where to put it.
+     *
+     * POST rather than GET even though nothing is persisted, because it mints a credential — a
+     * signed, time-limited grant to write to the bucket — and those should not be cacheable or
+     * sitting in a browser history.
+     */
+    @PostMapping("/{id}/image-upload-url")
+    fun requestImageUpload(
+        @PathVariable id: UUID,
+        @Valid @RequestBody request: ImageUploadRequest,
+    ): ImageUploadResponse {
+        val target = service.requestImageUpload(id, request.contentType)
+        return ImageUploadResponse(
+            uploadUrl = target.url.toString(),
+            key = target.key,
+            contentType = request.contentType,
+        )
+    }
+
+    /**
+     * Step two: the bytes are in S3, record them against the product.
+     *
+     * Separate from step one because an upload link can be issued and never used. Committing the
+     * key when the link is handed out would leave products pointing at objects that do not exist.
+     */
+    @PostMapping("/{id}/image")
+    fun confirmImage(
+        @PathVariable id: UUID,
+        @Valid @RequestBody request: ImageConfirmRequest,
+    ): ProductResponse = service.attachImage(id, request.key).withImage()
+
+    /** A snapshot plus a freshly signed link to its image, if it has one. */
+    private fun ProductSnapshot.withImage() = toResponse(service.viewUrl(this))
 }

@@ -17,4 +17,9 @@ data class ProductResponse(
     val version: Long,
     val createdAt: Instant,
     val updatedAt: Instant,
+    /**
+     * A presigned link to the product image, or null if it has none. Valid for
+     * `catalog.images.view-url-ttl`, so it is not worth a client caching or storing.
+     */
+    val imageUrl: String? = null,
 )
