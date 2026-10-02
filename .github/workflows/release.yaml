@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths: ["app/**"]
   workflow_dispatch:
+# Serialised across the whole matrix on purpose: both jobs push a commit to the same deploy repo,
+# and two of them racing would just burn the rebase retries below.
 concurrency: { group: release, cancel-in-progress: false }
 permissions:
   contents: read      # the tag bump goes to the deploy repo, via DEPLOY_REPO_TOKEN
@@ -11,6 +13,16 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    strategy:
+      # One image per deployable service, from the one repo. `fail-fast: false` so a flaky push of
+      # one image does not cancel the other; a release that half-succeeds is repaired by re-running.
+      fail-fast: false
+      matrix:
+        include:
+          - service: catalog-service
+            module: catalog-app
+          - service: search-service
+            module: search-app
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -18,10 +30,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Test and build
         working-directory: app
-        run: ./gradlew check bootJar
+        run: ./gradlew check :${{ matrix.module }}:bootJar
       - id: meta
         run: |
-          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/product-search" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
           echo "tag=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -33,6 +45,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: app
+          build-args: MODULE=${{ matrix.module }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
@@ -50,13 +63,13 @@ jobs:
           token: ${{ secrets.DEPLOY_REPO_TOKEN }}
           path: deploy-repo
       - name: Bump the image tag for ArgoCD
-        working-directory: deploy-repo/services/product-search/overlays/local
+        working-directory: deploy-repo/services/${{ matrix.service }}/overlays/local
         run: |
           set -euo pipefail
-          kustomize edit set image product-search=${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          kustomize edit set image ${{ matrix.service }}=${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "chore(deploy): product-search ${{ steps.meta.outputs.tag }}"
+          git commit -am "chore(deploy): ${{ matrix.service }} ${{ steps.meta.outputs.tag }}"
 
           # Several app repos push here, and `concurrency` only serialises within one repo — so a
           # simultaneous release elsewhere can win the race. Retry the rebase instead of failing a
