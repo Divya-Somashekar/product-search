@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: product-search
+resources:
+  - ../../base
+# release.yaml rewrites newTag here. The `name` is the contract between the two repos.
+images:
+  - name: search-service
+    newName: ghcr.io/divya-somashekar/search-service
+    newTag: latest

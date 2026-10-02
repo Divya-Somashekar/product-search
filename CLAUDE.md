@@ -21,6 +21,12 @@ This repo holds the service only. **Deployment config lives in a separate repo**
 ```text
 product-search/
 ├── app/                     # Kotlin / Spring Boot service (Gradle, own wrapper)
+│   ├── src/                 # the assembly: @SpringBootApplication, application*.yml,
+│   │                        #   LocalProductSource, and every integration test
+│   ├── catalog-contract/    # what leaves the catalog; no dependencies at all
+│   ├── catalog/             # Product aggregate, CRUD, Flyway migrations (db/)
+│   ├── search/              # Elasticsearch adapters, products-index.json
+│   └── shared/              # problem(), PageResponse, X-Request-Id filter, Clock
 ├── local/docker-compose.yml # Postgres + Elasticsearch for local development
 ├── docs/                    # rfd/0001 (engine choice), rfc/0001 (summary), architecture.md
 └── .github/workflows/       # ci.yaml (PRs), release.yaml (main)
@@ -59,19 +65,30 @@ Package `com.example.productsearch`, split into two bounded contexts plus `share
 layered `api` → `application` → `domain` ← `infrastructure` (DDD-lite: the JPA entity *is* the
 aggregate, and the Spring Data repository *is* the persistence port — no extra mapping layer).
 
+Each context is also a **Gradle module** (`:catalog-contract`, `:catalog`, `:search`, `:shared`),
+so the layering rules below are compile errors rather than review comments: `search` cannot reach
+into `catalog.api` because that package is not on its compile classpath at all.
+
+The root project is the **assembly** and nothing else — the `@SpringBootApplication`, the
+`application*.yml` files, the concerns that belong to the running service rather than to either
+context (actuator, OpenAPI, the Prometheus registry), and the integration tests. It is still what
+builds the single executable jar, so the Dockerfile and `release.yaml` are unaffected by the split;
+each module ships as a `BOOT-INF/lib/*.jar` inside it.
+
 | Package | What lives there |
 |---|---|
-| `catalog.domain` | `Product` (aggregate, `@Entity`), `ProductRepository`, `ProductCommand`, `ProductSnapshot`, `ProductPage`, change events, `ProductNotFoundException` |
-| `catalog.application` | `ProductService` — the CRUD use cases; commits, then publishes a change event |
-| `catalog.api` | `ProductController`, request/response DTOs, mappers, `CatalogExceptionHandler` |
-| `catalog.config` | `CatalogProperties` |
-| `search.domain` | search model (`SearchCriteria`, `SearchResult`, …) and the two ports: `ProductIndex` (query/index/delete via the alias) and `IndexLifecycle` (create/bulk-load/swap/drop) |
-| `search.application` | `ProductSearchService` (validate, measure), `ProductIndexer` (after-commit listener), `ReindexService` |
-| `search.infrastructure` | the Elasticsearch adapters: `ElasticsearchProductIndex`, `IndexManager`, `SearchQueryBuilder`, `ProductDocument` |
-| `search.api` | `SearchController`, `AdminReindexController`, response DTOs, mappers, `SortOptionConverter`, `SearchExceptionHandler` |
-| `search.config` | `SearchProperties`, `SearchConfiguration` (index initialiser) |
-| `shared.web` | `ApiExceptionHandler` (framework errors), `problem()`, `PageResponse`, `X-Request-Id` correlation filter |
-| `shared.config` | the application `Clock` |
+| `catalog.contract` (`:catalog-contract`) | `ProductSnapshot`, `ProductChange` (one change log entry) and the in-process change events — everything that leaves the catalog. Deliberately dependency-free: no Spring, no JPA, no Jackson, so it stays publishable as the wire contract |
+| `catalog.domain` (`:catalog`) | `Product` (aggregate, `@Entity`), `ProductRepository`, `ProductCommand`, `ProductPage`, `ProductNotFoundException`, `OutboxEntry`/`OutboxRepository` (the change log) |
+| `catalog.application` (`:catalog`) | `ProductService` — the CRUD use cases; commits, then publishes a change event |
+| `catalog.api` (`:catalog`) | `ProductController`, `InternalProductController` (the cross-service feed), request/response DTOs, mappers, `CatalogExceptionHandler` |
+| `catalog.config` (`:catalog`) | `CatalogProperties` |
+| `search.domain` (`:search`) | search model (`SearchCriteria`, `SearchResult`, …) and the three ports: `ProductIndex` (query/index/delete via the alias), `IndexLifecycle` (create/bulk-load/swap/drop) and `ProductSource` (keyset reads of the catalog for a rebuild) |
+| `search.application` (`:search`) | `ProductSearchService` (validate, measure), `ProductIndexer` (after-commit listener), `ReindexService` |
+| `search.infrastructure` (`:search`) | the Elasticsearch adapters: `ElasticsearchProductIndex`, `IndexManager`, `SearchQueryBuilder`, `ProductDocument` |
+| `search.api` (`:search`) | `SearchController`, `AdminReindexController`, response DTOs, mappers, `SortOptionConverter`, `SearchExceptionHandler` |
+| `search.config` (`:search`) | `SearchProperties`, `SearchConfiguration` (index initialiser) |
+| `shared.web` (`:shared`) | `ApiExceptionHandler` (framework errors), `problem()`, `PageResponse`, `X-Request-Id` correlation filter |
+| `shared.config` (`:shared`) | the application `Clock` |
 
 Layering rules worth keeping:
 
@@ -80,8 +97,12 @@ Layering rules worth keeping:
 - **Nothing below `api` knows about HTTP DTOs.** Writes enter as a `ProductCommand`; everything
   that leaves the catalog — responses, change events, index documents — travels as a
   `ProductSnapshot`, so `search` never imports `catalog.api`.
-- `search` depends on `catalog.domain` (the index is a projection of the catalog, and
-  `ReindexService` reads the source of truth); `catalog` never depends on `search`.
+- **`search` imports nothing from `catalog` but `catalog.contract`**, and `catalog` never depends
+  on `search`. Neither module is on the other's compile classpath, so this is a compile error, not
+  a convention. A rebuild reads the catalog through the `ProductSource` port; the composition root
+  (`assembly.LocalProductSource`) is the only place that knows both contexts, and it is the one
+  thing a service split replaces — with an adapter in the search service calling
+  `GET /internal/products` over the same keyset contract.
 - Each context maps its own failures in its `api` package; only framework-level errors live in
   `shared.web`.
 
@@ -92,6 +113,8 @@ Layering rules worth keeping:
 | `GET` | `/api/v1/products/search` | Search. Params: `q`, `category` (repeatable), `brand` (repeatable), `minPrice`, `maxPrice`, `inStock`, `sort` = `relevance` \| `price_asc` \| `price_desc`, `page` (≥0), `size` (1–100) |
 | `POST/GET/PUT/DELETE` | `/api/v1/products[/{id}]` | CRUD in Postgres; each write is mirrored to the index |
 | `POST` | `/api/v1/admin/reindex` | Rebuild the index from Postgres (409 if one is already running) |
+| `GET` | `/internal/products` | Keyset page of `ProductSnapshot` for services that rebuild a projection of the catalog. Params: `after` (last id seen), `size` (1–1000). A short page is the last one. Unauthenticated, like `/admin/reindex` |
+| `GET` | `/internal/changes` | The catalog's change log, oldest first, for keeping a projection in step. Params: `after` (highest `seq` applied), `size` (1–1000). `product` is `null` when the product is gone. Entries newer than `catalog.outbox.visibility-lag` are held back |
 
 Errors are `application/problem+json`. Swagger UI: `/swagger-ui.html`. Actuator (health,
 prometheus) is on the **management port 8081**, not on 8080.
@@ -147,8 +170,11 @@ Run from `app/` unless noted.
 ./gradlew check                 # ktlint + unit + Testcontainers integration tests + Kover (≥70%)
 ./gradlew test                  # tests only
 ./gradlew ktlintFormat          # fix formatting
-./gradlew koverLog              # print coverage
+./gradlew koverLog              # print coverage (one aggregated number across all modules)
 ./gradlew bootTestRun           # run the app against throwaway containers, with demo data
+
+./gradlew :search:test          # one module's own tests (integration tests are in the root project)
+./gradlew projects              # list the modules
 
 # against local/docker-compose.yml (run compose from the repo root)
 docker compose -f local/docker-compose.yml up -d
@@ -157,12 +183,19 @@ docker compose -f local/docker-compose.yml up -d
 ./gradlew bootJar && docker build -t product-search:dev .   # local image
 ```
 
-Tests mirror the main source tree: `search/infrastructure/SearchQueryBuilderTest` (unit),
-`search/api/ProductSearchIntegrationTest` and `catalog/api/ProductApiIntegrationTest` (Spring
-context + real Postgres 18 and Elasticsearch 9.4.5). All integration tests share one context and
-one set of containers via the `@IntegrationTest` annotation. The acceptance cases — "wireles
-headphons" still finds wireless headphones, and `maxPrice=100` excludes pricier items — are in
-`ProductSearchIntegrationTest`.
+Tests mirror the main source tree. Unit tests live in their own module —
+`search/infrastructure/SearchQueryBuilderTest` is in `:search`. **Integration tests live in the
+root project**, not in the module they exercise: they are `@SpringBootTest` against the assembled
+application with real Postgres 18 and Elasticsearch 9.4.5, so they belong to the assembly, and
+keeping them together is what lets all of them share one context and one set of containers via the
+`@IntegrationTest` annotation. Splitting them per module would mean a context and a container pair
+each, and `ProductSearchIntegrationTest` needs Postgres anyway to test the CRUD-to-search path.
+
+Coverage is aggregated across every module (`kover(project(...))` in the root build), so the root's
+integration tests still count towards the classes they cover in `:catalog` and `:search`; a module
+does not report or verify its own coverage, and `./gradlew koverLog` stays one number. The
+acceptance cases — "wireles headphons" still finds wireless headphones, and `maxPrice=100` excludes
+pricier items — are in `ProductSearchIntegrationTest`.
 
 ## CI/CD
 
@@ -254,8 +287,14 @@ Not production yet; fix before anything real:
 - `POST /api/v1/admin/reindex` has no authentication.
 - No NetworkPolicy (minikube's default CNI doesn't enforce one anyway) — see the deploy repo.
 - No image scanning or dependency scanning in CI.
-- Indexing is synchronous after commit with a few retries; an outbox (or CDC) would make it
-  guaranteed.
+- Indexing is still synchronous after commit with a few retries. The outbox that makes it
+  guaranteed now exists (`product_outbox`, written in the same transaction, served by
+  `GET /internal/changes`) but **nothing consumes it yet** — the search side still relies on the
+  in-process `@TransactionalEventListener`. Wiring a consumer to the feed is what replaces it.
+- The change log holds entries back for `catalog.outbox.visibility-lag` (1s) because `seq` is
+  assigned on insert while rows become visible on commit, so a reader could otherwise step past a
+  `seq` still in flight. A write that takes longer than the lag to commit can still be missed;
+  `POST /api/v1/admin/reindex` is the repair.
 - One environment (`overlays/local` in the deploy repo); stg/prod overlays would sit beside it.
 - Demo data is loaded by Flyway under the `demo` profile — never enable it in a real environment.
 

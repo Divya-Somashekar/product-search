@@ -1,0 +1,17 @@
+spring:
+  elasticsearch:
+    uris: http://localhost:9200
+
+search:
+  catalog:
+    base-url: http://localhost:8080
+  refresh: wait_for
+management:
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  structured:
+    format:
+      console: ""

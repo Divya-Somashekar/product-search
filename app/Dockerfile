@@ -1,6 +1,12 @@
+# Which module's boot jar to package. `.` is the single-process assembly used for local
+# development; `catalog-app` and `search-app` are the two deployable services.
+#   docker build --build-arg MODULE=catalog-app -t catalog-service:dev .
+ARG MODULE=.
+
 FROM eclipse-temurin:25-jre AS extract
+ARG MODULE
 WORKDIR /build
-COPY build/libs/product-search-*.jar app.jar
+COPY ${MODULE}/build/libs/*.jar app.jar
 RUN java -Djarmode=tools -jar app.jar extract --layers --launcher --destination extracted
 
 FROM eclipse-temurin:25-jre

@@ -1,0 +1,65 @@
+spring:
+  application:
+    name: search-service
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  # No datasource and no Flyway: this service has no database. Elasticsearch connection settings
+  # come from the environment (SPRING_ELASTICSEARCH_URIS, ...).
+  elasticsearch:
+    connection-timeout: 2s
+    socket-timeout: 10s
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: 8080
+  shutdown: graceful
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          # Deliberately not the catalog: search must stay servable while the catalog is down.
+          # That independence is the whole point of the split.
+          include: readinessState,elasticsearch
+  observations:
+    key-values:
+      application: ${spring.application.name}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+search:
+  alias: products
+  refresh: false
+  catalog:
+    # Set per environment; its presence is what activates the HTTP adapters.
+    base-url: ${CATALOG_BASE_URL:http://catalog-service}
+  sync:
+    enabled: true
+    interval: 1s

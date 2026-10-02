@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-service
+  labels: { app.kubernetes.io/name: catalog-service }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: catalog-service }
+  strategy:
+    type: RollingUpdate
+    # Never drop below the desired count during a rollout; the PDB keeps one alive during drains.
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: catalog-service }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: app
+          # Replaced by `kustomize edit set image catalog-service=...` in the overlay, which this
+          # repo's release.yaml runs. Renaming it here silently stops tag bumps.
+          image: catalog-service
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: management, containerPort: 8081 }
+          env:
+            - { name: SPRING_PROFILES_ACTIVE, value: demo }
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://products-db-rw:5432/products
+            # CloudNativePG creates this Secret; nothing is checked in.
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom: { secretKeyRef: { name: products-db-app, key: username } }
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom: { secretKeyRef: { name: products-db-app, key: password } }
+          # Readiness covers Postgres only: this service has no other dependency.
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: management }
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: management }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: management }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 768Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

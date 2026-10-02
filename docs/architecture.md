@@ -64,7 +64,7 @@ flowchart LR
 | **Good at** | Transactions, constraints (`price >= 0`), exact reads by id, durability | Typos, relevance ranking, highlighting, facets, fast full-text search |
 | **Written by** | `ProductService` (create, update, delete) | `ProductIndexer` (after each commit), `ReindexService` (bulk rebuild) |
 | **Read by** | `GET /products/{id}`, `GET /products`, reindex | `GET /products/search` only |
-| **Schema** | Flyway: `app/src/main/resources/db/migration/V1__create_product.sql` | `app/src/main/resources/elasticsearch/products-index.json` |
+| **Schema** | Flyway: `app/catalog/src/main/resources/db/migration/V1__create_product.sql` | `app/search/src/main/resources/elasticsearch/products-index.json` |
 | **Runs as** | pod `products-db-1`, managed by the CloudNativePG operator | pod `search-es-default-0`, managed by the ECK operator |
 | **If it is down** | Writes and id reads fail (503/500); the pod goes *not ready* | Searches return 503; writes still succeed and are repaired later by reindex |
 

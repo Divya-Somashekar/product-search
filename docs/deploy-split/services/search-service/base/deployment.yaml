@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-service
+  labels: { app.kubernetes.io/name: search-service }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: search-service }
+  strategy:
+    type: RollingUpdate
+    # Never drop below the desired count during a rollout; the PDB keeps one alive during drains.
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: search-service }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: app
+          # Replaced by `kustomize edit set image search-service=...` in the overlay, which this
+          # repo's release.yaml runs. Renaming it here silently stops tag bumps.
+          image: search-service
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: management, containerPort: 8081 }
+          env:
+            # No `demo` profile here: that profile only adds Flyway locations, and this service
+            # has no database. Demo data reaches the index through the catalog's feed.
+            - name: SPRING_ELASTICSEARCH_URIS
+              value: http://search-es-http:9200
+            # ECK creates this Secret; nothing is checked in.
+            - name: SPRING_ELASTICSEARCH_USERNAME
+              value: elastic
+            - name: SPRING_ELASTICSEARCH_PASSWORD
+              valueFrom: { secretKeyRef: { name: search-es-elastic-user, key: elastic } }
+            # Used to rebuild the index and to tail the change log. NOT part of readiness.
+            - name: CATALOG_BASE_URL
+              value: http://catalog-service
+          # Readiness covers Elasticsearch only, deliberately not the catalog: search must keep serving while the catalog is down.
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: management }
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: management }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: management }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 768Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
