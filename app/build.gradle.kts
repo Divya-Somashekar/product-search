@@ -1,11 +1,10 @@
 plugins {
-    kotlin("jvm") version "2.3.21"
-    kotlin("plugin.spring") version "2.3.21"
-    kotlin("plugin.jpa") version "2.3.21"
-    id("org.springframework.boot") version "4.1.1"
-    id("io.spring.dependency-management") version "1.1.7"
-    id("org.jlleitschuh.gradle.ktlint") version "14.2.0"
-    id("org.jetbrains.kotlinx.kover") version "0.9.11"
+    kotlin("jvm")
+    kotlin("plugin.spring")
+    id("org.springframework.boot")
+    id("io.spring.dependency-management")
+    id("org.jlleitschuh.gradle.ktlint")
+    id("org.jetbrains.kotlinx.kover")
 }
 
 group = "com.example"
@@ -22,19 +21,19 @@ repositories {
     mavenCentral()
 }
 
+// The root project is the assembly: the @SpringBootApplication, application*.yml, the concerns
+// that belong to the running service rather than to either context (actuator, OpenAPI, the
+// Prometheus registry), and the integration tests. Each context's own libraries moved with it.
 dependencies {
+    implementation(project(":catalog"))
+    implementation(project(":search"))
+
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
-    implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
-    implementation("org.springframework.boot:spring-boot-starter-data-jpa")
-    implementation("org.springframework.boot:spring-boot-starter-flyway")
-    implementation("org.springframework.boot:spring-boot-starter-data-elasticsearch")
-    implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("tools.jackson.module:jackson-module-kotlin")
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
-    runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
@@ -54,13 +53,11 @@ kotlin {
     }
 }
 
-allOpen {
-    annotation("jakarta.persistence.Entity")
-    annotation("jakarta.persistence.MappedSuperclass")
-    annotation("jakarta.persistence.Embeddable")
-}
-
-tasks.withType<Test> {
+/**
+ * Shared by the root project and every module, so a module that gains integration tests finds
+ * Docker the same way this project always has.
+ */
+fun Test.configureForThisMachine() {
     useJUnitPlatform()
 
     // Testcontainers only probes DOCKER_HOST, ~/.testcontainers.properties and
@@ -78,9 +75,80 @@ tasks.withType<Test> {
     }
 }
 
+tasks.withType<Test> {
+    configureForThisMachine()
+}
+
+// Every module gets the same Kotlin, Boot BOM and lint setup; only dependencies differ, so each
+// module's own build file stays short. The Boot plugin is applied for its dependency BOM, not to
+// build a jar — the one executable jar is still the root project's.
+subprojects {
+    apply(plugin = "org.jetbrains.kotlin.jvm")
+    apply(plugin = "org.jetbrains.kotlin.plugin.spring")
+    apply(plugin = "org.springframework.boot")
+    apply(plugin = "io.spring.dependency-management")
+    apply(plugin = "org.jlleitschuh.gradle.ktlint")
+    apply(plugin = "org.jetbrains.kotlinx.kover")
+
+    repositories {
+        mavenCentral()
+    }
+
+    extensions.configure<JavaPluginExtension> {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(25)
+        }
+    }
+
+    extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmExtension> {
+        compilerOptions {
+            freeCompilerArgs.addAll("-Xjsr305=strict", "-Xannotation-default-target=param-property")
+            allWarningsAsErrors = true
+        }
+    }
+
+    dependencies {
+        "testImplementation"("org.jetbrains.kotlin:kotlin-test-junit5")
+        "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
+    }
+
+    tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") { enabled = false }
+    // The Boot plugin classifies a plain jar as `-plain`; a library module only ever produces the
+    // plain one, so drop the classifier and keep the image's BOOT-INF/lib readable.
+    tasks.named<Jar>("jar") {
+        enabled = true
+        archiveClassifier = ""
+    }
+    tasks.withType<Test> { configureForThisMachine() }
+
+    // Coverage is only meaningful across the whole application, so a module neither reports nor
+    // verifies its own — `./gradlew koverLog` stays one number. The coverage artifact each module
+    // produces still feeds the root report.
+    val aggregateOnly =
+        setOf(
+            "koverLog",
+            "koverPrintCoverage",
+            "koverVerify",
+            "koverCachedVerify",
+            "koverHtmlReport",
+            "koverXmlReport",
+            "koverBinaryReport",
+        )
+    tasks.matching { it.name.removeSuffix("Jvm") in aggregateOnly }.configureEach { enabled = false }
+}
+
 // Only the boot jar is needed; skip the plain jar so the image build picks one file.
 tasks.jar {
     enabled = false
+}
+
+// Coverage is measured across every module, not just the root project, so moving a package into
+// a module cannot quietly drop it out of the 70% gate.
+dependencies {
+    kover(project(":shared"))
+    kover(project(":catalog-contract"))
+    kover(project(":catalog"))
+    kover(project(":search"))
 }
 
 kover {
