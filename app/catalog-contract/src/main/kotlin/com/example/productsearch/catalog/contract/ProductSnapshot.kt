@@ -22,4 +22,15 @@ data class ProductSnapshot(
     val version: Long,
     val createdAt: Instant,
     val updatedAt: Instant,
+    /**
+     * S3 object key of the product image, or null if it has none.
+     *
+     * The key rather than a URL, because the URL handed to a client is presigned and expires in
+     * minutes — publishing one in a snapshot that may be cached or indexed would mean publishing
+     * something already stale. Consumers that need a usable link ask for one at the point of use.
+     *
+     * Defaulted so the field can be added without touching the one construction site or any
+     * consumer deserialising this shape.
+     */
+    val imageKey: String? = null,
 )

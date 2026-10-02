@@ -36,6 +36,13 @@ class Product(
     @Column(length = 3)
     var currency: String,
     var stockQuantity: Int,
+    /**
+     * Set by [attachImage] once an upload is confirmed, never by [update]: an image arrives
+     * through its own endpoint after the bytes are in S3, so a plain product edit must not be
+     * able to point at an object that may not exist.
+     */
+    @Column(length = 300)
+    var imageKey: String? = null,
 ) {
     // Null until first persisted; Spring Data uses it to tell new entities from existing ones.
     @Version
@@ -52,6 +59,11 @@ class Product(
     @PreUpdate
     fun onUpdate() {
         updatedAt = Instant.now()
+    }
+
+    /** Records the object key of an image whose bytes are already in S3. */
+    fun attachImage(key: String) {
+        imageKey = key
     }
 
     /** Applies the writable fields of [command], trimming what callers may have padded. */
@@ -83,6 +95,7 @@ class Product(
             version = checkNotNull(version) { "product $id has not been persisted" },
             createdAt = createdAt,
             updatedAt = updatedAt,
+            imageKey = imageKey,
         )
 
     companion object {

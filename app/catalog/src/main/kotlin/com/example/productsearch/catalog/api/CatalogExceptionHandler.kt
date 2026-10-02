@@ -1,5 +1,6 @@
 package com.example.productsearch.catalog.api
 
+import com.example.productsearch.catalog.domain.ProductImageRejectedException
 import com.example.productsearch.catalog.domain.ProductNotFoundException
 import com.example.productsearch.shared.web.problem
 import org.springframework.http.HttpStatus
@@ -12,6 +13,10 @@ import org.springframework.web.bind.annotation.RestControllerAdvice
 class CatalogExceptionHandler {
     @ExceptionHandler(ProductNotFoundException::class)
     fun notFound(e: ProductNotFoundException) = problem(HttpStatus.NOT_FOUND, e.message)
+
+    /** The detail is safe to return: it describes what the caller sent, never anything internal. */
+    @ExceptionHandler(ProductImageRejectedException::class)
+    fun imageRejected(e: ProductImageRejectedException) = problem(HttpStatus.BAD_REQUEST, e.message)
 
     /**
      * Only the catalog has versioned entities, so this belongs here rather than in `shared.web`:

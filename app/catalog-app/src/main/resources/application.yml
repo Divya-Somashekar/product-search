@@ -64,6 +64,17 @@ springdoc:
 
 catalog:
   currency: EUR
+  images:
+    # No default. CATALOG_IMAGES_BUCKET comes from the deploy overlay's ConfigMap, which Terraform
+    # owns the value of; S3Configuration fails startup if it is missing rather than presigning
+    # against an empty bucket name.
+    bucket: ${CATALOG_IMAGES_BUCKET:}
+    # Blank by default so the SDK reads AWS_REGION, which the deploy overlay sets and IRSA
+    # supplies on EKS. Only a context with no AWS environment needs this set explicitly.
+    region: ${CATALOG_IMAGES_REGION:}
+    view-url-ttl: 15m
+    upload-url-ttl: 10m
+    max-upload-bytes: 5242880
   outbox:
     # Must outlast the gap between an outbox insert and its commit, or a consumer can step past a
     # seq still in flight. See CLAUDE.md.
