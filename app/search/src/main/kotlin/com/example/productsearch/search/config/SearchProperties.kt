@@ -27,8 +27,29 @@ data class SearchProperties(
     @field:Min(1)
     val facetSize: Int = 20,
     val indexing: Indexing = Indexing(),
+    /** Only used when search runs as its own service and has to reach the catalog over HTTP. */
+    val catalog: Catalog = Catalog(),
+    val sync: Sync = Sync(),
 ) {
     enum class RefreshPolicy { FALSE, WAIT_FOR }
+
+    data class Catalog(
+        /** Base URL of the catalog service, e.g. `http://catalog-service`. */
+        val baseUrl: String = "",
+        val pageSize: Int = 500,
+        val readTimeout: Duration = Duration.ofSeconds(10),
+    )
+
+    data class Sync(
+        /**
+         * Poll the catalog's change log. Off in the monolith, where the in-process after-commit
+         * listener already keeps the index in step; on when search is its own service.
+         */
+        val enabled: Boolean = false,
+        val interval: Duration = Duration.ofSeconds(1),
+        @field:Min(1)
+        val batchSize: Int = 500,
+    )
 
     data class Indexing(
         @field:Min(1)

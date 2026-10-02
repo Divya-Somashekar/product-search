@@ -9,4 +9,6 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-elasticsearch")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("io.micrometer:micrometer-core")
+    // Reading the catalog's feed over HTTP when search runs as its own service.
+    implementation("tools.jackson.module:jackson-module-kotlin")
 }

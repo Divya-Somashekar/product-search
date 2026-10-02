@@ -1,0 +1,70 @@
+spring:
+  application:
+    name: catalog-service
+  profiles:
+    group:
+      local: demo
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  # Connection settings come from the environment (SPRING_DATASOURCE_*); nothing secret is here.
+  datasource:
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 5000 # ms
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    locations: classpath:db/migration
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: 8080
+  shutdown: graceful
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          # This service owns Postgres and nothing else, so that is all readiness depends on.
+          include: readinessState,db
+  observations:
+    key-values:
+      application: ${spring.application.name}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+catalog:
+  currency: EUR
+  outbox:
+    # Must outlast the gap between an outbox insert and its commit, or a consumer can step past a
+    # seq still in flight. See CLAUDE.md.
+    visibility-lag: 1s

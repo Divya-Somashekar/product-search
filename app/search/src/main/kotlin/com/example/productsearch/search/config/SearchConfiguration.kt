@@ -4,8 +4,10 @@ import com.example.productsearch.search.application.ReindexService
 import org.springframework.boot.ApplicationRunner
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.scheduling.annotation.EnableScheduling
 
 @Configuration(proxyBeanMethods = false)
+@EnableScheduling
 class SearchConfiguration {
     /**
      * Makes sure the alias exists before traffic arrives. Fails startup if Elasticsearch is

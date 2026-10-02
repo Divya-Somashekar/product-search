@@ -1,0 +1,4 @@
+# Loads the demo catalogue on top of the schema. Never enable in a real environment.
+spring:
+  flyway:
+    locations: classpath:db/migration,classpath:db/demo

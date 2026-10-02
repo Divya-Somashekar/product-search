@@ -31,3 +31,8 @@ include("shared")
 include("catalog-contract")
 include("catalog")
 include("search")
+
+// The two deployable services. Each produces its own boot jar and its own image; the root project
+// stays the single-process assembly used for local development and the integration tests.
+include("catalog-app")
+include("search-app")
