@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 concurrency: { group: release, cancel-in-progress: false }
 permissions:
-  contents: write     # commit the tag bump
+  contents: read      # the tag bump goes to the deploy repo, via DEPLOY_REPO_TOKEN
   packages: write     # push to ghcr.io
 jobs:
   release:
@@ -37,11 +37,37 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-      - name: Deploy (bump image tag for ArgoCD)
+      # ---- cross-repo deploy ----------------------------------------------------------------
+      # The tag bump lands in the deploy repo, not here. GITHUB_TOKEN cannot write to another
+      # repository, so this needs a token with write access to Divya-Somashekar/deploy:
+      #   DEPLOY_REPO_TOKEN — a GitHub App installation token (preferred: scoped to that one repo,
+      #   short-lived) or a fine-grained PAT with Contents: read/write on it.
+      - name: Check out the deploy repo
+        uses: actions/checkout@v4
+        with:
+          repository: Divya-Somashekar/deploy
+          ref: main
+          token: ${{ secrets.DEPLOY_REPO_TOKEN }}
+          path: deploy-repo
+      - name: Bump the image tag for ArgoCD
+        working-directory: deploy-repo/services/product-search/overlays/local
         run: |
-          cd deploy/services/product-search/overlays/local
+          set -euo pipefail
           kustomize edit set image product-search=${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "chore(deploy): product-search ${{ steps.meta.outputs.tag }}"
-          git pull --rebase && git push
+
+          # Several app repos push here, and `concurrency` only serialises within one repo — so a
+          # simultaneous release elsewhere can win the race. Retry the rebase instead of failing a
+          # release that already pushed its image.
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase --autostash && git push; then
+              echo "pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "push rejected, retrying ($attempt/5)"
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not push the tag bump to the deploy repo after 5 attempts"
+          exit 1

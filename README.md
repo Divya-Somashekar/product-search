@@ -69,17 +69,21 @@ Both start with the same ~40 demo products (headphones, speakers, keyboards…).
 
 ```text
 app/                 the Kotlin/Spring Boot service (has its own Gradle wrapper)
-  src/main/…/product/    Postgres side: entity, CRUD API
-  src/main/…/search/     Elasticsearch side: index, indexing, search API
+  src/main/…/catalog/    Postgres side: entity, CRUD API (api/application/domain)
+  src/main/…/search/     Elasticsearch side: index, indexing, search API (+ infrastructure)
+  src/main/…/shared/     error responses, X-Request-Id filter, clock
   src/main/resources/    application.yml, Flyway SQL (db/migration, db/demo), index mapping JSON
   Dockerfile
-deploy/              what ArgoCD deploys
-  bootstrap/root-app.yaml   the ONE file applied by hand; points ArgoCD at deploy/apps
-  apps/                     4 ArgoCD Applications (below)
-  platform/data/            "please create an Elasticsearch and a Postgres"
-  services/product-search/  the app's Deployment/Service; overlays/local holds the image tag
+docs/                rfd/0001 (why Elasticsearch), rfc/0001 (the short version), architecture.md
 local/docker-compose.yml    Postgres + Elasticsearch for local dev
 .github/workflows/          ci.yaml (pull requests), release.yaml (main)
+
+# Deployment config is NOT here. It lives in the shared deploy repo:
+#   github.com/Divya-Somashekar/deploy
+#     bootstrap/root-app.yaml                  the ONE file applied by hand
+#     apps/                                    Applications + the services ApplicationSet
+#     platform/data/                           "please create an Elasticsearch and a Postgres"
+#     services/product-search/overlays/local/  this service's image tag
 ```
 
 ### The 4 ArgoCD apps (all children of `root`)
@@ -89,9 +93,12 @@ local/docker-compose.yml    Postgres + Elasticsearch for local dev
 | `eck-operator` | Installs Elastic's operator. It knows how to run Elasticsearch on Kubernetes. |
 | `cnpg-operator` | Installs the CloudNativePG operator. It knows how to run Postgres on Kubernetes. |
 | `data` | Two small files asking those operators for 1 Elasticsearch node and 1 Postgres database. The operators create the pods, services and password secrets. |
-| `product-search` | The app itself: 2 pods using the image tag CI committed. |
+| `product-search` | The app itself: 2 pods using the image tag CI committed. **Generated** by the `services` ApplicationSet from the directory `services/product-search/overlays/local`, so you will see both the ApplicationSet and this Application in ArgoCD. |
 
 They sync in that order (operators → data → app) via sync waves.
+
+Adding another project to the cluster is a new directory in the deploy repo under `services/`, not a
+new Application file — the ApplicationSet discovers it.
 
 ---
 
@@ -207,7 +214,9 @@ kubectl create namespace argocd
 kubectl apply -n argocd --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 kubectl -n argocd rollout status deploy/argocd-server
 
-kubectl apply -f deploy/bootstrap/root-app.yaml   # from the repo root — the only manual apply
+# The only manual apply, run from a clone of the deploy repo:
+#   git clone https://github.com/Divya-Somashekar/deploy.git && cd deploy
+kubectl apply -f bootstrap/root-app.yaml
 kubectl -n argocd get applications -w             # ~5–10 min until everything is Healthy
 ```
 
@@ -377,7 +386,9 @@ Things that surprised me:
 | Pods `Pending` | Out of memory/CPU in minikube → `kubectl describe pod …` shows why |
 | `secret "products-db-app" not found` | Postgres not ready yet (first start) → wait; check `kubectl -n product-search get cluster` |
 | `ImagePullBackOff` / `InvalidImageName` | No release ran yet, image private, or image name not lowercase |
-| ArgoCD app `OutOfSync`/error right after a `deploy/` edit | Broken YAML → `kubectl kustomize deploy/services/product-search/overlays/local` and `kubectl kustomize deploy/platform/data` locally |
+| ArgoCD app `OutOfSync`/error right after a manifest edit | Broken YAML → in the deploy repo, `kustomize build services/product-search/overlays/local` and `kustomize build platform/data` |
+| ArgoCD shows a manifest that differs from the repo | Expected. The UI renders kustomize *output*, and the LIVE tab adds API-server defaults plus `argocd.argoproj.io/tracking-id`. Compare against the DESIRED tab |
+| Image tag never updates after a release | The overlay's `images[].name` no longer matches `product-search`, so `kustomize edit set image` is a no-op. Check the deploy repo's overlay |
 | `port-forward` fails "address already in use" | Something (bootRun, compose, another forward) already has that port → pick another local port |
 | Search results look stale/wrong | `curl -X POST …/api/v1/admin/reindex` |
 

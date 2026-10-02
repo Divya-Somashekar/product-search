@@ -15,11 +15,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: reports, path: app/build/reports }
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate manifests
-        run: |
-          curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
-          kustomize build deploy/services/product-search/overlays/local | ./kubeconform -strict -summary -
+
+# The manifest-validation job moved to the deploy repo
+# (Divya-Somashekar/deploy, .github/workflows/ci.yaml), which is where the kustomize overlays now
+# live and where every service's overlay gets rendered — not just this one.

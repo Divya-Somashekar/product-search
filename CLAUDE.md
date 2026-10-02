@@ -15,19 +15,14 @@ snippets; and category/brand facets.
 
 ## Repository Layout
 
-One repo holds both the service and its deployment config.
+This repo holds the service only. **Deployment config lives in a separate repo**,
+`Divya-Somashekar/deploy`, shared with the other projects — see [Deployment](#deployment).
 
 ```text
 product-search/
 ├── app/                     # Kotlin / Spring Boot service (Gradle, own wrapper)
-├── deploy/                  # Everything ArgoCD reads (GitOps)
-│   ├── bootstrap/           # root-app.yaml — the only thing applied by hand
-│   ├── apps/                # ArgoCD Applications (app-of-apps children)
-│   ├── platform/data/       # Elasticsearch (ECK) + Postgres (CloudNativePG) resources
-│   └── services/product-search/
-│       ├── base/            # Deployment, Service, PodDisruptionBudget
-│       └── overlays/local/  # namespace + image tag (CI rewrites the tag)
 ├── local/docker-compose.yml # Postgres + Elasticsearch for local development
+├── docs/                    # rfd/0001 (engine choice), rfc/0001 (summary), architecture.md
 └── .github/workflows/       # ci.yaml (PRs), release.yaml (main)
 ```
 
@@ -35,9 +30,10 @@ product-search/
 
 ```text
 push to main (app/**) ─► release.yaml: test ─► build image ─► push to GHCR
-                                        └─► commit new tag into deploy/.../overlays/local
+                                        └─► bot commit into the DEPLOY REPO:
+                                            services/product-search/overlays/local
                                                           │
-                              ArgoCD (in minikube) watches main, path deploy/apps
+                       ArgoCD (in minikube) watches the deploy repo's main, path apps
                                                           ▼
           ECK ─► Elasticsearch "search"   CloudNativePG ─► Postgres "products-db"
                                    ▲                         ▲
@@ -59,13 +55,35 @@ JUnit 5 + Testcontainers, ktlint, Kover.
 The build was written by hand: start.spring.io returned HTTP 500 for every Kotlin + Gradle project
 when this was set up. Versions were taken from the Boot 4.1.1 BOM.
 
-Package `com.example.productsearch`:
+Package `com.example.productsearch`, split into two bounded contexts plus `shared`, each context
+layered `api` → `application` → `domain` ← `infrastructure` (DDD-lite: the JPA entity *is* the
+aggregate, and the Spring Data repository *is* the persistence port — no extra mapping layer).
 
 | Package | What lives there |
 |---|---|
-| `product` | JPA entity, repository, service, CRUD controller, DTOs, change events, `CatalogProperties` |
-| `search` | index lifecycle (`IndexManager`), indexing, reindexing, query building, search service/controller |
-| `common` | error handling (`ApiExceptionHandler`), `X-Request-Id` correlation filter, web config |
+| `catalog.domain` | `Product` (aggregate, `@Entity`), `ProductRepository`, `ProductCommand`, `ProductSnapshot`, `ProductPage`, change events, `ProductNotFoundException` |
+| `catalog.application` | `ProductService` — the CRUD use cases; commits, then publishes a change event |
+| `catalog.api` | `ProductController`, request/response DTOs, mappers, `CatalogExceptionHandler` |
+| `catalog.config` | `CatalogProperties` |
+| `search.domain` | search model (`SearchCriteria`, `SearchResult`, …) and the two ports: `ProductIndex` (query/index/delete via the alias) and `IndexLifecycle` (create/bulk-load/swap/drop) |
+| `search.application` | `ProductSearchService` (validate, measure), `ProductIndexer` (after-commit listener), `ReindexService` |
+| `search.infrastructure` | the Elasticsearch adapters: `ElasticsearchProductIndex`, `IndexManager`, `SearchQueryBuilder`, `ProductDocument` |
+| `search.api` | `SearchController`, `AdminReindexController`, response DTOs, mappers, `SortOptionConverter`, `SearchExceptionHandler` |
+| `search.config` | `SearchProperties`, `SearchConfiguration` (index initialiser) |
+| `shared.web` | `ApiExceptionHandler` (framework errors), `problem()`, `PageResponse`, `X-Request-Id` correlation filter |
+| `shared.config` | the application `Clock` |
+
+Layering rules worth keeping:
+
+- **No Elasticsearch type leaves `search.infrastructure`.** The adapter rewrites client failures
+  as `SearchUnavailableException`, which `search.api` renders as 503.
+- **Nothing below `api` knows about HTTP DTOs.** Writes enter as a `ProductCommand`; everything
+  that leaves the catalog — responses, change events, index documents — travels as a
+  `ProductSnapshot`, so `search` never imports `catalog.api`.
+- `search` depends on `catalog.domain` (the index is a projection of the catalog, and
+  `ReindexService` reads the source of truth); `catalog` never depends on `search`.
+- Each context maps its own failures in its `api` package; only framework-level errors live in
+  `shared.web`.
 
 ### API
 
@@ -139,47 +157,52 @@ docker compose -f local/docker-compose.yml up -d
 ./gradlew bootJar && docker build -t product-search:dev .   # local image
 ```
 
-Tests: `SearchQueryBuilderTest` (unit), `ProductSearchIntegrationTest` and
-`ProductApiIntegrationTest` (Spring context + real Postgres 18 and Elasticsearch 9.4.5). All
-integration tests share one context and one set of containers via the `@IntegrationTest`
-annotation. The acceptance cases — "wireles headphons" still finds wireless headphones, and
-`maxPrice=100` excludes pricier items — are in `ProductSearchIntegrationTest`.
+Tests mirror the main source tree: `search/infrastructure/SearchQueryBuilderTest` (unit),
+`search/api/ProductSearchIntegrationTest` and `catalog/api/ProductApiIntegrationTest` (Spring
+context + real Postgres 18 and Elasticsearch 9.4.5). All integration tests share one context and
+one set of containers via the `@IntegrationTest` annotation. The acceptance cases — "wireles
+headphons" still finds wireless headphones, and `maxPrice=100` excludes pricier items — are in
+`ProductSearchIntegrationTest`.
 
 ## CI/CD
 
 | Workflow | Trigger | Does |
 |---|---|---|
-| `ci.yaml` | every pull request | `./gradlew check`; renders the overlay with kustomize and validates it with kubeconform |
-| `release.yaml` | push to `main` touching `app/**`, or manual (`workflow_dispatch`) | `check` + `bootJar`, multi-arch image (`linux/amd64,linux/arm64`) to `ghcr.io/divya-somashekar/product-search:<12-char sha>`, then `kustomize edit set image` in `deploy/services/product-search/overlays/local` and a bot commit to `main` |
+| `ci.yaml` | every pull request | `./gradlew check`. Manifest validation moved to the deploy repo's own CI, which renders every service's overlay rather than just this one |
+| `release.yaml` | push to `main` touching `app/**`, or manual (`workflow_dispatch`) | `check` + `bootJar`, multi-arch image (`linux/amd64,linux/arm64`) to `ghcr.io/divya-somashekar/product-search:<12-char sha>`, then checks out the **deploy repo** with `DEPLOY_REPO_TOKEN`, runs `kustomize edit set image` in `services/product-search/overlays/local`, and pushes a bot commit there |
 
 - Registry is **GHCR**, authenticated with the built-in `GITHUB_TOKEN` (`packages: write`); no
   registry secrets exist. JFrog was the original plan but needs a company account.
 - The image is public, so the cluster needs no pull secret.
 - Image names must be **lowercase** (`divya-somashekar`, not `Divya-Somashekar`).
-- The bot's tag-bump commit touches only `deploy/`, and `GITHUB_TOKEN` commits don't trigger
-  workflows, so a release never re-triggers itself.
-- Changes to only `deploy/` or `.github/` do **not** release. To release without an app change:
+- The tag bump lands in the **deploy repo**, so a release can never re-trigger this repo's
+  workflows. It needs `DEPLOY_REPO_TOKEN` (a GitHub App installation token, or a fine-grained PAT
+  with `Contents: read/write` on the deploy repo) — `GITHUB_TOKEN` cannot write to another repo.
+- Note the token's pushes **do** trigger workflows in the deploy repo, unlike `GITHUB_TOKEN`. That
+  repo's CI is `on: pull_request` only for exactly this reason.
+- Several app repos push to the same deploy repo, and `concurrency` only serialises within one repo,
+  so the bump step retries its rebase-and-push up to five times.
+- Changes to only `.github/` do **not** release. To release without an app change:
   `gh workflow run release.yaml --ref main`.
 - Multi-arch matters: the Mac/minikube is arm64, GitHub runners are amd64.
 
-**A merge to `main` that touches `app/` is a deploy.** Pull after a release to pick up the bot commit.
+**A merge to `main` that touches `app/` is a deploy** — but the resulting bot commit lands in the
+deploy repo, not here. `git log` in this repo no longer tells you what is deployed; pull the deploy
+repo for that.
 
-## Deployment (`deploy/`)
+## Deployment
 
-ArgoCD runs inside the minikube cluster and pulls from `main`. `deploy/bootstrap/root-app.yaml`
-is an app-of-apps pointing at `deploy/apps/`, which holds:
+Deployment config is **not in this repo**. It lives in `Divya-Somashekar/deploy`, which ArgoCD
+watches, and which also serves the other projects. Read that repo's `README.md` and `CLAUDE.md`
+for the bootstrap, the Application/ApplicationSet layout, and how to onboard a service.
 
-| Application | Wave | Source | Namespace |
-|---|---|---|---|
-| `eck-operator` | -1 | Helm `https://helm.elastic.co` `eck-operator` 3.5.0 | `elastic-system` |
-| `cnpg-operator` | -1 | Helm `https://cloudnative-pg.github.io/charts` `cloudnative-pg` 0.29.1 | `cnpg-system` |
-| `data` | 0 | `deploy/platform/data` | `product-search` |
-| `product-search` | 1 | `deploy/services/product-search/overlays/local` | `product-search` |
+What matters from this side:
 
-- Operators use `ServerSideApply=true` (their CRDs are too large for client-side apply).
-- `data` and `product-search` use `SkipDryRunOnMissingResource=true` and a `retry` block: sync
-  waves order the apps but don't wait for CRDs, so a first sync may fail and succeed on retry.
-- The app gets credentials from operator-created Secrets: `products-db-app`
+- This service's manifests are at `services/product-search/{base,overlays/local}` in that repo.
+- `release.yaml` here rewrites the image in that overlay with
+  `kustomize edit set image product-search=…`. **The `product-search` image name in the overlay's
+  `images[]` is a contract**: rename it there and this repo's deploys silently stop updating the tag.
+- Credentials come from operator-created Secrets in the cluster: `products-db-app`
   (`username`/`password`, CloudNativePG) and `search-es-elastic-user` (`elastic`, ECK). Service
   names: `products-db-rw:5432`, `search-es-http:9200`.
 - Pods: 2 replicas, PodDisruptionBudget `minAvailable: 1`, rolling update with
@@ -187,20 +210,11 @@ is an app-of-apps pointing at `deploy/apps/`, which holds:
   all capabilities dropped, probes on port 8081 (`/actuator/health/{liveness,readiness}`),
   readiness includes Postgres and Elasticsearch.
 
-Bootstrap a fresh cluster:
+Bootstrap and day-two operations live in the deploy repo. To reach a running instance from here:
 
 ```bash
-minikube start --driver=docker --cpus 4 --memory 6g
-kubectl create namespace argocd
-kubectl apply -n argocd --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-kubectl -n argocd rollout status deploy/argocd-server
-kubectl apply -f deploy/bootstrap/root-app.yaml
-kubectl -n argocd get applications          # wait for Synced / Healthy
 kubectl -n product-search port-forward svc/product-search 8080:80
 ```
-
-`kubectl apply` on `root-app.yaml` updates it in place; deleting `root` does not cascade to its
-children (no finalizer), so delete those explicitly when starting over.
 
 ## Testing a Running Deployment
 
@@ -228,9 +242,9 @@ curl -s 'localhost:8080/api/v1/products/search?q=wireles%20headphons&maxPrice=10
 - **Docker Compose** is not bundled with Homebrew's `docker`: `brew install docker-compose` and
   symlink it into `~/.docker/cli-plugins/`.
 - **YAML edits.** Several manifests were once broken by pasted indentation and stray terminal
-  text. After editing anything under `deploy/` or `.github/`, render it:
-  `kubectl kustomize deploy/services/product-search/overlays/local` and
-  `kubectl kustomize deploy/platform/data`. Quote URLs inside `{ … }` flow mappings.
+  text. Manifests now live in the deploy repo — render them there before pushing
+  (`kustomize build services/product-search/overlays/local`). In this repo the same care applies to
+  `.github/workflows/`. Quote URLs inside `{ … }` flow mappings.
 
 ## Known PoC Shortcuts
 
@@ -238,15 +252,16 @@ Not production yet; fix before anything real:
 
 - Elasticsearch runs with TLS disabled and the app uses the `elastic` superuser.
 - `POST /api/v1/admin/reindex` has no authentication.
-- No NetworkPolicy (minikube's default CNI doesn't enforce one anyway).
+- No NetworkPolicy (minikube's default CNI doesn't enforce one anyway) — see the deploy repo.
 - No image scanning or dependency scanning in CI.
 - Indexing is synchronous after commit with a few retries; an outbox (or CDC) would make it
   guaranteed.
-- One environment (`overlays/local`); stg/prod overlays would sit beside it.
+- One environment (`overlays/local` in the deploy repo); stg/prod overlays would sit beside it.
 - Demo data is loaded by Flyway under the `demo` profile — never enable it in a real environment.
 
 ## Conventions
 
-- Conventional commits (`feat:`, `fix:`, `chore:`; `chore(deploy):` is the release bot).
+- Conventional commits (`feat:`, `fix:`, `chore:`). `chore(deploy):` is the release bot, and those
+  commits now appear in the deploy repo rather than here.
 - Match the surrounding Kotlin style; ktlint is enforced and warnings are errors.
 - New behavior gets a test; search relevance changes get an integration test with a concrete query.
